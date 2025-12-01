@@ -1,0 +1,202 @@
+#!/bin/bash
+# ============================================================================
+# REAL PRODUCTION-STYLE INSTALLATION OF:
+# Prometheus + Node Exporter + Grafana on Amazon Linux
+# ============================================================================
+
+set -e
+
+echo "=== Updating system ==="
+sudo yum update -y
+sudo yum install -y wget tar gzip vim
+
+# ============================================================================
+# 1. CREATE USERS (SECURITY BEST PRACTICE)
+# ============================================================================
+
+echo "=== Creating users ==="
+sudo useradd --no-create-home --shell /bin/false prometheus || true
+sudo useradd --no-create-home --shell /bin/false node_exporter || true
+
+# ============================================================================
+# 2. CREATE DIRECTORIES
+# ============================================================================
+
+echo "=== Creating directory structure ==="
+sudo mkdir -p /opt/prometheus
+sudo mkdir -p /etc/prometheus
+sudo mkdir -p /var/lib/prometheus
+sudo mkdir -p /opt/node_exporter
+
+sudo chown -R prometheus:prometheus /opt/prometheus /etc/prometheus /var/lib/prometheus
+sudo chown -R node_exporter:node_exporter /opt/node_exporter
+
+# ============================================================================
+# 3. DOWNLOAD & INSTALL PROMETHEUS
+# ============================================================================
+
+PROM_VERSION="2.52.0"
+
+echo "=== Downloading Prometheus v$PROM_VERSION ==="
+cd /tmp
+wget https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz
+tar -xzf prometheus-${PROM_VERSION}.linux-amd64.tar.gz
+
+echo "=== Installing Prometheus binaries ==="
+sudo cp prometheus-${PROM_VERSION}.linux-amd64/prometheus /opt/prometheus/
+sudo cp promEtool=${PROM_VERSION}.* /opt/prometheus/promtool
+sudo cp -r prometheus-${PROM_VERSION}.linux-amd64/consoles /opt/prometheus/
+sudo cp -r prometheus-${PROM_VERSION}.linux-amd64/console_libraries /opt/prometheus/
+sudo cp prometheus-${PROM_VERSION}.linux-amd64/prometheus.yml /etc/prometheus/prometheus.yml
+
+sudo chown -R prometheus:prometheus /opt/prometheus /etc/prometheus
+
+# ============================================================================
+# 4. PROMETHEUS CONFIG FILE (CLEAN + PRODUCTION READY)
+# ============================================================================
+
+echo "=== Writing Prometheus config ==="
+sudo tee /etc/prometheus/prometheus.yml > /dev/null << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs: 
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          app: 'prometheus'
+
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+EOF
+
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+
+# ============================================================================
+# 5. PROMETHEUS SYSTEMD SERVICE
+# ============================================================================
+
+echo "=== Creating Prometheus service ==="
+sudo tee /etc/systemd/system/prome.service > /dev/null << 'EOF'
+[Unit]
+Description=Prometheus Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+WorkingDirectory=/etc/prometheus
+
+ExecStart=/opt/prometheus/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/opt/prometheus/consoles \
+  --web.console.libraries=/opt/prometheus/console_libraries \
+  --storage.tsdb.retention.time=15d
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ============================================================================
+# 6. START PROMETHEUS
+# ============================================================================
+
+echo "=== Starting Prometheus ==="
+sudo systemctl daemon-reload
+sudo systemctl enable prome
+sudo systemctl start prome
+
+# ============================================================================
+# 7. INSTALL NODE EXPORTER
+# ============================================================================
+
+NODE_VERSION="1.8.1"
+
+echo "=== Downloading Node Exporter v$NODE_VERSION ==="
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v${NODE_VERSION}/node_exporter-${NODE_VERSION}.linux-amd64.tar.gz
+tar -xzf node_exporter-${NODE_VERSION}.linux-amd64.tar.gz
+
+echo "=== Installing Node Exporter binaries ==="
+sudo cp node_exporter-${NODE_VERSION}.linux-amd64/node_exporter /opt/node_exporter/
+
+sudo chown -R node_exporter:node_exporter /opt/node_exporter
+
+echo "=== Creating Node Exporter service ==="
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null << 'EOF'
+[Unit]
+Description=Node Exporter
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+ExecStart=/opt/node_exporter/node_exporter
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "=== Starting Node Exporter ==="
+sudo systemctl daemon-reload
+sudo systemctl enable node_exporter
+sudo systemctl start node_exporter
+
+# ============================================================================
+# 8. GRAFANA INSTALL
+# ============================================================================
+
+echo "=== Adding Grafana repo ==="
+sudo tee /etc/yum.repos.d/grafana.repo > /dev/null << 'EOF'
+[grafana]
+name=Grafana
+baseurl=https://packages.grafana.com/oss/rpm
+repo_gpgcheck=1
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.grafana.com/gpg.key
+EOF
+
+echo "=== Installing Grafana ==="
+sudo yum install -y grafana
+
+echo "=== Starting Grafana ==="
+sudo systemctl daemon-reload
+sudo systemctl start grafana-server
+sudo systemctl enable grafana-server
+
+# ============================================================================
+# 9. DONE
+# ============================================================================
+
+echo ""
+echo "===================================================="
+echo "Prometheus running on  : http://<EC2-IP>:9090"
+echo "Node Exporter running  : http://<EC2-IP>:9100/metrics"
+echo "Grafana running on     : http://<EC2-IP>:3000"
+echo "Login Grafana: admin / admin"
+echo "===================================================="
+echo ""
