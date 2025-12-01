@@ -1,0 +1,209 @@
+1. Prometheus File Structure (Production Standard)
+/opt/prometheus/                # Prometheus binaries only
+│── prometheus                  # main server binary
+│── promtool                    # validation & debugging tool
+│── consoles/                   # HTML dashboards (built-in)
+│── console_libraries/          # JS/CSS libs for consoles
+
+/etc/prometheus/                # ALL config files (clean separation)
+│── prometheus.yml              # main config (jobs, scrape targets)
+│── rules/                      # (optional) alert & recording rules
+│     └── *.rules.yml
+
+/var/lib/prometheus/            # TSDB database (actual metric storage)
+│── chunks_head/                # in-memory chunks
+│── wal/                        # write-ahead-log
+│── lock                        # TSDB lock file
+│── queries.active              # active query metadata
+
+/etc/systemd/system/
+│── prome.service               # Prometheus systemd service
+
+🔥 Why this structure?
+
+/opt = vendor binaries
+
+/etc = configuration
+
+/var/lib = persistent data
+
+/etc/systemd/system = service control
+
+This split is required if you want production reliability and clean backup/versioning.
+
+✅ 2. Node Exporter File Structure
+/opt/node_exporter/             # Node Exporter binary only
+│── node_exporter
+
+/etc/systemd/system/
+│── node_exporter.service       # systemd service file
+
+🔥 Why this structure?
+
+Node exporter has no config; only one binary
+
+Runs as a non-root user
+
+Must be clean & isolated
+
+✅ 3. Grafana File Structure (installed via Yum repo)
+/etc/grafana/                   # Grafana configuration
+│── grafana.ini                 # main config file
+│── provisioning/
+│     ├── datasources/          # auto-provision Prometheus datasource
+│     ├── dashboards/           # auto-load dashboard json files
+│     └── notifiers/            # alert channels
+
+/var/lib/grafana/               # Grafana database + users + dashboards
+│── grafana.db                  # SQLite DB storing users, sessions
+│── plugins/                    # installed plugins
+
+/var/log/grafana/               # logs
+│── grafana.log
+│── grafana.stdout
+│── grafana.stderr
+
+/usr/share/grafana/             # graphical UI, public assets
+│── public/
+│── plugins-bundled/
+
+/etc/systemd/system/ 
+│── grafana-server.service      # systemd service file (may also be under /usr/lib/systemd/system/)
+
+🔥 Why this structure?
+
+/etc/grafana = static configs
+
+/var/lib/grafana = dynamic data (DB, dashboards, plugins)
+
+/var/log/grafana = logs
+
+/usr/share/grafana = UI + frontend assets
+
+🔥 4. Combined Final Monitoring Structure
+/opt/
+│── prometheus/
+│── node_exporter/
+
+/etc/
+│── prometheus/
+│── grafana/
+
+/var/lib/
+│── prometheus/
+│── grafana/
+
+/etc/systemd/system/
+│── prome.service
+│── node_exporter.service
+│── grafana-server.service
+
+
+This is how a real company maintains monitoring for bare-metal or EC2-based environments.
+ASCII Architecture Diagram — Prometheus Monitoring on Amazon Linux
+                          ┌───────────────────────────────┐
+                          │        Grafana (Port 3000)     │
+                          │   - Dashboards                 │
+                          │   - Visualizations             │
+                          │   - PromQL Queries             │
+                          └───────────────▲────────────────┘
+                                          │
+                                          │  reads data via HTTP API
+                                          │  (http://localhost:9090)
+                                          │
+                          ┌───────────────┴────────────────┐
+                          │    Prometheus Server (9090)     │
+                          │---------------------------------│
+                          │ - Scrapes targets                │
+                          │ - Stores TSDB data               │
+                          │ - Runs rules (if configured)     │
+                          │ - Provides API for Grafana       │
+                          └───────────────▲──────────────────┘
+                                          │
+                                          │  pulls metrics every 15s
+                                          │  (scrape job: node_exporter)
+                                          │
+                   ┌──────────────────────┴────────────────────────┐
+                   │         Node Exporter (Port 9100)             │
+                   │---------------------------------------------- │
+                   │ - Exposes Linux metrics:                      │
+                   │     CPU, Memory, Disk, Network, Load, FS      │
+                   │ - No config, only binary                      │
+                   │ - Runs under node_exporter user               │
+                   └──────────────────────┬────────────────────────┘
+                                          │
+                                          │  reads from Linux /proc, /sys
+                                          ▼
+                                 ┌────────────────┐
+                                 │  Amazon Linux  │
+                                 │  EC2 Instance  │
+                                 └────────────────┘
+
+🔥 EXPLANATION OF THE FLOW (SHORT & CLEAR)
+1) Node Exporter
+
+Runs on EC2
+
+Reads system metrics from /proc and /sys
+
+Exposes metrics on localhost:9100/metrics
+
+2) Prometheus
+
+Scrapes Node Exporter every 15 seconds
+
+Stores all metrics in TSDB (/var/lib/prometheus)
+
+Exposes its own metrics & API on 9090
+
+3) Grafana
+
+Connects to Prometheus as a “data source”
+
+Executes PromQL queries
+
+Draws dashboards using Prometheus time-series data
+
+💥 ASCII Diagram — File Structure + Flow Combined
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ EC2 HOST FILE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/opt/
+   ├── prometheus/
+   │     ├── prometheus
+   │     ├── promtool
+   │     ├── consoles/
+   │     └── console_libraries/
+   └── node_exporter/
+         └── node_exporter
+
+/etc/
+   ├── prometheus/
+   │     └── prometheus.yml
+   └── grafana/
+         └── grafana.ini (and provisioning)
+
+/var/lib/
+   ├── prometheus/   (TSDB data)
+   └── grafana/      (dashboard DB + plugins)
+
+/etc/systemd/system/
+   ├── prome.service
+   ├── node_exporter.service
+   └── grafana-server.service
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ METRICS FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[Linux Kernel] 
+      │
+      ▼
+[Node Exporter :9100]
+      │ (scraped by)
+      ▼
+[Prometheus :9090]
+      │ (queried by)
+      ▼
+[Grafana :3000]  --> dashboards
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
